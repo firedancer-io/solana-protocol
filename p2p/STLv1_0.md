@@ -18,20 +18,15 @@ This document specifies STL v1.0, the first release.
 
 STL v1.0 features authentication and encryption using modern
 cryptography.  The handshake mechanism follows the [Noise Protocol]
-framework.  The authenticated encryption cipher [TLS 1.3].
+framework.
 
   [Noise Protocol]: http://www.noiseprotocol.org/noise.html
-  [TLS 1.3]: https://datatracker.ietf.org/doc/html/rfc8446
 
 > **The acronym STL is deliberately annoying to discourage production**
 > **use before finalization of the protocol.  If chosen for adoption,**
 > **it is to be renamed by a Solana community vote.**
 
 ## 1. Requirements
-
-We define a base set of requirements realized using the simple
-mode.  A superset including stretch goals is realized using the
-encrypted mode.
 
 ### 1.1. Application layer base requirements
 
@@ -113,13 +108,6 @@ recover confidential information from public packet length information.
 It is the responsibility of the application to pad the plaintext before
 passing it to STL.
 
-**Forward Secrecy**
-
-Currently, Solana clients expect that the data they send to eventually
-become public.  It is not an explicit design goal to maintain data
-confidentiality for an extended period after sending (e.g. multiple
-hours).
-
 **Client Anonymity**
 
 The STL v1.0 handshake does not encrypt peer identities (public keys).
@@ -143,9 +131,9 @@ STL is session oriented.  For any two peers to exchange data, they must
 first negotiate a session.  Sessions are ephemeral in nature.  Once a
 session expires, no more data may be sent over that session.
 
-The session state minimally includes a pseudorandom 56-bit session ID
-and the wallclock time of expiry.  It typically also includes symmetric
-keys for encryption and authentication.
+The session state minimally includes a pseudorandom 56-bit session ID,
+the source IP of the client, the wallclock time of expiry, and
+symmetric encryption keys.
 
 ### 2.3. Handshake
 
@@ -155,7 +143,8 @@ peer is referred to as the "server".  It is assumed that the client
 knows the server endpoint and identity before sending the first packet.
 
 The handshake mechanism verifies that both peers agree on their
-respective cryptographic identities.
+respective cryptographic identities.  It also established a symmetric
+key for encryption and authentication.
 
 ### 2.4. Application
 
@@ -263,6 +252,13 @@ At offset `0x08` follows packet type-specific data.
 
 ## 3.3. Handshake Protocol
 
+The handshake cryptography in STLv1.0 is an instantation of Noise
+protocol `Noise_N_25519_ChaChaPoly_BLAKE2s` with handshake pattern IK.
+
+To improve filtering performance, all handshake data (including the
+client identity) is sent unencrypted.  This gives up the identity
+hiding property of STL but preserves all other security properties.
+
 The following figure shows the four-way sequence of handshake packets
 in STL v1.0.
 
@@ -289,18 +285,70 @@ in STL v1.0.
 All `STL-1.0-A` and `STL-1.0-AE` packets in the handshake protocol use
 the following layout.
 
-| Offset | Field         | Type       |
-|--------|---------------|------------|
-| `0x00` | Base Header   |            |
-| `0x08` | `cookie`      | `[u8; 32]` |
-| `0x28` | `identity`    | `[u8; 32]` |
-| `0x48` | `key_share`   | `[u8; 32]` |
-| `0x68` | `random`      | `[u8; 32]` |
-| `0x88` | `verify`      | `[u8; 32]` |
-| `0xa8` | `suite`       | `u16`      |
-| `0xaa` | `next_packet` | `u16`      |
+| Offset | Field         | Type       | Description               |
+|--------|---------------|------------|---------------------------|
+| `0x00` | Base Header   |            |                           |
+| `0x08` | `cookie`      | `[32]byte` | SYN cookie                |
+| `0x28` | `static`      | `[32]byte` | Identity key              |
+| `0x48` | `ephemeral`   | `[32]byte` | Ephemeral key             |
+| `0x68` | `mac`         | `[32]byte` | Message auth tag          |
+| `0x88` | `version_max` | `u16`      | Max supported STL version |
+| `0x8a` | `suite`       | `u16`      | Cryptographic suite       |
 
-### 3.3.2. Server Cookie
+### 3.3.2. Cryptographic Operations
+
+STLv1.0 uses the following externally defined routines.
+
+Types:
+
+- `bool`: A bit (`zero` or `one`)
+- `[]byte`: A sequence of bytes with arbitrary length
+- `[n]byte`: A sequence of bytes with length `n`
+- `Curve25519_PrivateKey`: 32 byte Curve25519 private key (random scalar)
+- `X25519_PublicKey`: 32 byte X25519 public key (compressed Montgomery
+  curve point)
+- `X25519_SharedSecret`: 32 byte secret value produced by an X25519 key
+  exchange
+- `Ed25519_PublicKey`: 32 byte Ed25519 public key (compressed Edwards
+  curve point)
+
+Functions:
+
+- `SipHash2-4(key [16]byte, msg []byte) -> (hash [8]byte)`:
+  SipHash2-4 keyed hash function
+- `Blake2s(key [32]byte, msg []byte) -> (hash [32]byte)`:
+  Blake2s keyed hash function
+- `X25519_Keygen() -> (Curve25519_PrivateKey, X25519_PublicKey)`:
+  Generate a new X25519 key pair from local cryptographically secure
+  randomness
+- `X25519(Curve25519_PrivateKey, X25519_PublicKey) -> X25519_SharedSecret`:
+  Derive a shared secret using the local X25519 private key and the
+  peer's X25519 public key
+- `EdtoX25519(X25519_PublicKey) -> Ed25519_PublicKey`:
+  Convert an Ed25519 public key to a X25519
+- `Poly1305(key [32]byte, msg []byte) -> [16]byte`
+  Generate a one-time message authentication code using Poly1305
+  (Poly1305 tag)
+- `ChaCha20_Block(key [32]byte, message [64]byte, index [4]byte, nonce [12]byte) -> (encrypted_message [64]byte)`
+  The ChaCha20 block function
+- `ChaCha20_Poly1305_Encrypt(key [32]byte, nonce [12]byte, data []byte, aad []byte) -> (encrypted_data []byte)`:
+  Encrypt a byte stream with ChaCha20 and generate a Poly1305 tag that
+  authenticates the encrypted data and unencrypted associated data
+- `ChaCha20_Poly1305_Decrypt(key [32]byte, nonce [12]byte, encrypted_data []byte, aad []byte) -> (data []byte, is_valid bool)`:
+  Decrypt a ChaCha20-encrypted byte stream and verify that the Poly1305
+  tag is valid for the decrypted data and unencrypted associated data
+
+### 3.3.3. Static Key Derivation
+
+TODO
+
+### 3.3.4. Client Initial
+
+The client initial is the first handshake message.
+
+TODO
+
+### 3.3.5. Server Cookie
 
 The _Server Cookie_ is a 32 byte message authentication code generated
 by the server from the incoming _Client Initial_.  The _Server Cookie_
@@ -310,40 +358,17 @@ server to statelessly verify that the sender assuming the source network
 address of the _Client Initial_ is able to receive response data at that
 same address.
 
-### 3.3.3. X25519 Key Exchange
+TODO
 
-The client and server use a key exchange algorithm to securely establish
-a _shared secret_ from which symmetric authentication and encryption
-keys can be derived.
-
-The key exchange algorithm in `STL-1.0-A` and `STL-1.0-AE` is X25519.
-Each peer MUST generate an X25519 key pair from cryptographically secure
-randomness.
-
-### 3.3.4. Peer Random
+### 3.3.6. Server Continue
 
 TODO
 
-### 3.3.5. Ed25519 Authentification
-
-The client and server respectively sign over a commitment to all
-session parameters.
+### 3.3.7. Client Accept
 
 TODO
 
-### 3.3.6. Client Initial
-
-TODO
-
-### 3.3.7. Server Continue
-
-TODO
-
-### 3.3.8. Client Accept
-
-TODO
-
-### 3.3.9. Server Accept
+### 3.3.8. Server Accept
 
 TODO
 
@@ -439,29 +464,21 @@ TODO
 
 ### 5.4. Cryptography
 
-This draft of STL chooses a conservative set of widely deployed
-cryptographic algorithms.  These algorithms are thought to have been
+This draft of STL uses the cryptographic algorithms of Noise Protocol.
+The ChaCha20-based suite is chosen over AES because ChaCha-like core
+functions are already widely used in the Solana protocol.  The
+algorithms in the Noise protocol framework are thought to have been
 subjected to sufficient security research.  High quality open source
 implementations are also available.
 
-#### 5.5. Hash Functions
+#### 5.5. SYN Cookie
 
-SHA-256 is extremely widespread and supports hardware acceleration
-on x86_64 and armv8.  SHA-256 is vulnerable to length extension
-attacks and thus requires the use of the HMAC-SHA256 construction for
-key expansion.
-
-It is proposed to use SHAKE-256 instead for all uses of a crypto-
-graphic hash function.  (Except Ed25519 signatures, for which it is
-unsafe to replace SHA-512)
-
-The handshake cookie has particularly weak security requirements.
-If (second-)preimage resistance of the underlying cryptography is
-broken, only server-side DDoS mitigation is temporarily degraded.
-The handshake mechanism itself remains secure.  The cookie hash
-function is also in the "hot path" of a flood attack involving
-repeated client initial packets.  The cookie hash function should
-thus be chosen for maximum performance.
+The SYN cookie has particularly weak security requirements. If
+SipHash2-4 is broken, only server-side DDoS mitigation is temporarily
+degraded. The handshake mechanism itself remains secure.  The cookie
+hash function is also in the "hot path" of a flood attack involving
+repeated client initial packets.  The cookie hash function should thus
+be chosen for maximum performance.
 
 ## 6. Implementation Guidance
 
