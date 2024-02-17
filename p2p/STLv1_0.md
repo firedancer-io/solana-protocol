@@ -209,13 +209,15 @@ Henceforth, we specify cases in which a packet should be dropped.
 Unless otherwise noted, peers MUST NOT destroy any other state, such
 as the session object, when dropping a packet.
 
-### 3.2. Feature String
+### 3.2. Suite
 
-The feature string identifies the STL protocol version and cryptographic
-configuration.  This specification covers the following configurations.
+The suite identifies the STL protocol version and cryptographic
+configuration.  This specification covers the following suites.
 
-- `STL-1.0-A`: STL v1.0, authenticated, unencrypted
-- `STL-1.0-AE`: STL v1.0, authenticated, encrypted
+| ID       | String       | Description                          |
+|----------|--------------|--------------------------------------|
+| `0x0001` | `STL-1.0-A`  | STL v1.0, authenticated, unencrypted |
+| `0x0002` | `STL-1.0-AE` | STL v1.0, authenticated, encrypted   |
 
 ### 3.2. Common Header
 
@@ -230,7 +232,7 @@ The common packet header is defined as follows.
 The `version_type` field contains two packed 4-bit fields:
 `version` (most significant bits) and `type` (least significant bits).
 
-The `version` field is hardcoded to `0x01`.
+The `version` field is hardcoded to `0x1`.
 STL v1.0 peers MUST ignore incoming packets with any other version
 number.
 
@@ -240,13 +242,14 @@ type is described in detail below.
 
 Incoming packets with an unsupported `type` MUST be dropped.
 
-| Value  | Protocol    | Meaning              |
-|--------|-------------|----------------------|
-| `0x01` | Application | Data                 |
-| `0x02` | Handshake   | Client Initial       |
-| `0x03` | Handshake   | Server Continue      |
-| `0x04` | Handshake   | Client Accept        |
-| `0x05` | Handshake   | Server Accept        |
+| Value | Protocol    | Meaning              |
+|-------|-------------|----------------------|
+| `0x1` | Application | Data                 |
+| `0x9` | Handshake   | Reserved             |
+| `0xa` | Handshake   | Client Initial       |
+| `0xb` | Handshake   | Server Continue      |
+| `0xc` | Handshake   | Client Accept        |
+| `0xd` | Handshake   | Server Accept        |
 
 At offset `0x08` follows packet type-specific data.
 
@@ -280,6 +283,32 @@ in STL v1.0.
      |<---------------------|
 ```
 
+The next figure shows the key exchange in Noise Protocol notation with
+comments.
+
+```
+IK:
+  <- s
+  # client discovers the server static key via an out-of-band mechanism
+  # (e.g. manually added or via gossip)
+
+  ...
+
+  -> e, es, s, ss
+  # client sends the "Client Accept" packet containing its ephemeral
+  # public key, static public key, and a MAC authenticating the
+  # transcript, keyed by the ECDH shared secrets es=X25519(client
+  # ephemeral private key, server static public key), and ss=X25519(
+  # client static private key, server static public key).
+
+  <- e, ee, se
+  # server sends the "Server Accept" packet containing its ephemeral
+  # public key, and a MAC authenticating the transcript, keyed by the
+  # ECDH shared secrets es, ss, ee=X25519(server ephemeral private key,
+  # client ephemeral public key), and se=X25519(server static private
+  # key, client ephemeral public key).
+```
+
 ### 3.3.1. Handshake Packet
 
 All `STL-1.0-A` and `STL-1.0-AE` packets in the handshake protocol use
@@ -287,8 +316,8 @@ the following layout.
 
 | Offset | Field         | Type       | Description               |
 |--------|---------------|------------|---------------------------|
-| `0x00` | Base Header   |            |                           |
-| `0x08` | `cookie`      | `[32]byte` | SYN cookie                |
+| `0x00` | Common Header |            |                           |
+| `0x08` | `cookie`      | `[32]byte` | Server cookie             |
 | `0x28` | `static`      | `[32]byte` | Identity key              |
 | `0x48` | `ephemeral`   | `[32]byte` | Ephemeral key             |
 | `0x68` | `mac`         | `[32]byte` | Message auth tag          |
@@ -324,8 +353,10 @@ Functions:
 - `X25519(Curve25519_PrivateKey, X25519_PublicKey) -> X25519_SharedSecret`:
   Derive a shared secret using the local X25519 private key and the
   peer's X25519 public key
-- `EdtoX25519(X25519_PublicKey) -> Ed25519_PublicKey`:
-  Convert an Ed25519 public key to a X25519
+- `EdToX25519(X25519_PublicKey) -> Ed25519_PublicKey`:
+  Convert an Ed25519 public key to a X25519.  Defined in
+  [RFC 7748, Section 4.1](https://datatracker.ietf.org/doc/html/rfc7748#section-4.1),
+  see "birational maps": `(u, v) = ((1+y)/(1-y), sqrt(-486664)*u/x)`
 - `Poly1305(key [32]byte, msg []byte) -> [16]byte`
   Generate a one-time message authentication code using Poly1305
   (Poly1305 tag)
@@ -338,17 +369,66 @@ Functions:
   Decrypt a ChaCha20-encrypted byte stream and verify that the Poly1305
   tag is valid for the decrypted data and unencrypted associated data
 
-### 3.3.3. Static Key Derivation
+### 3.3.3. Static Keys
 
-TODO
+Both peers compute an X25519 key pair ahead of time.
+
+```go
+server_static_private, server_static_public := X25519_Keygen()
+
+client_static_private, client_static_public := X25519_Keygen()
+```
+
+It is assumed that the client knows the server's static key in advance.
+
+The client or server X25519 static key MAY be derived from an Ed25519
+key using the `EdToX25519` operation, like so:
+
+```go
+client_static_private := external_ed25519_client_private
+client_static_public  := EdToX25519(external_ed25519_client_public)
+
+server_static_private := external_ed25519_server_private
+server_static_public  := EdToX25519(external_ed25519_server_public)
+```
 
 ### 3.3.4. Client Initial
 
-The client initial is the first handshake message.
+Before connecting, the client generates a new ephemeral X25519 key pair:
 
-TODO
+```go
+client_ephemeral_private, client_ephemeral_public := X25519_Keygen()
+```
 
-### 3.3.5. Server Cookie
+The client initial is the first handshake message.  It includes the
+client's connection request parameters.
+
+**Client Initial Packet**
+
+```go
+var client_initial HandshakePacket
+client_initial.version_type = 0x1a    // version 1, client initial
+client_initial.session_id   = zero
+client_initial.cookie       = zero
+client_initial.static       = client_static_public
+client_initial.ephemeral    = client_ephemeral_public
+client_initial.mac          = zero
+client_initial.version_max  = 0x0001  // version 1
+client_initial.suite        = ?       // any supported version 1 suite
+```
+
+### 3.3.5. Server Continue
+
+The server MAY ignore any received _Client Initial_.
+
+If the server chooses to accept the client, it computes a response
+without allocating any state.
+
+The server MUST ignore _Client Initial_ if any of the following is true:
+- The `version_type` is not `0x1a`
+- TODO (padding, etc)
+
+**Server Cookie**
 
 The _Server Cookie_ is a 32 byte message authentication code generated
 by the server from the incoming _Client Initial_.  The _Server Cookie_
@@ -358,17 +438,25 @@ server to statelessly verify that the sender assuming the source network
 address of the _Client Initial_ is able to receive response data at that
 same address.
 
+The value of the _Server Cookie_ is implementation-defined.  It is
+RECOMMENDED to construct it via `SipHash2-4`.
+
+The _Server Cookie_ is a hash over the following message.  TODO
+
+| Offset | Field         | Content               |
+|--------|---------------|-----------------------|
+| `0x00` | `prefix`      | `STL1` (ASCII)        |
+| `0x04` | `version_max` | Client Initial packet |
+
+**Server Continue Packet**
+
 TODO
 
-### 3.3.6. Server Continue
+### 3.3.6. Client Accept
 
 TODO
 
-### 3.3.7. Client Accept
-
-TODO
-
-### 3.3.8. Server Accept
+### 3.3.7. Server Accept
 
 TODO
 
@@ -471,9 +559,9 @@ algorithms in the Noise protocol framework are thought to have been
 subjected to sufficient security research.  High quality open source
 implementations are also available.
 
-#### 5.5. SYN Cookie
+#### 5.5. Server Cookie
 
-The SYN cookie has particularly weak security requirements. If
+The server cookie has particularly weak security requirements. If
 SipHash2-4 is broken, only server-side DDoS mitigation is temporarily
 degraded. The handshake mechanism itself remains secure.  The cookie
 hash function is also in the "hot path" of a flood attack involving
