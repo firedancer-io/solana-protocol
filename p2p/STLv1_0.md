@@ -249,8 +249,9 @@ At offset `0x08` follows packet type-specific data.
 
 ## 3.3. Handshake Protocol
 
-The handshake cryptography in STLv1.0 is an instantation of Noise
-protocol `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
+The handshake cryptography in STLv1.0 follows the Noise handshake
+pattern IK.  The ECDH function is X25519.  The MAC function is Poly1305.
+The AEAD function is ChaCha20-Poly1305.  The hash function is BLAKE3.
 
 To improve filtering performance, all handshake data (including the
 client identity) is sent unencrypted.  This gives up the identity
@@ -339,10 +340,10 @@ Functions:
 
 - `SipHash2-4(key [16]byte, msg []byte) -> (hash [8]byte)`:
   SipHash2-4 keyed hash function
-- `Blake2s(msg []byte) -> (hash [32]byte)`:
-  Blake2s hash function
-- `Blake2s_Keyed(key [32]byte, msg []byte) -> (hash [32]byte)`:
-  Blake2s keyed hash function
+- `BLAKE3(msg []byte, sz int) -> (hash [sz]byte)`:
+  BLAKE3 hash function
+- `BLAKE3_Keyed(key [32]byte, msg []byte, sz int) -> (hash [sz]byte)`:
+  BLAKE3 keyed hash function
 - `X25519_Keygen() -> (Curve25519_PrivateKey, X25519_PublicKey)`:
   Generate a new X25519 key pair from local cryptographically secure
   randomness
@@ -465,8 +466,8 @@ TODO
 **Client Accept MAC**
 
 ```go
-key1 := Blake2s_Keyed(X25519(client_ephemeral_private, server_static_public), zero)
-key2 := Blake2s_Keyed(X25519(client_static_private,    server_static_public), key1)
+key1 := BLAKE3_Keyed(X25519(client_ephemeral_private, server_static_public), zero, 32)
+key2 := BLAKE3_Keyed(X25519(client_static_private,    server_static_public), key1, 32)
 
 // TODO mix in additional metadata
 client_transcript := "STLv1.0\x00" ||
@@ -474,7 +475,8 @@ client_transcript := "STLv1.0\x00" ||
     client_ephemeral_public ||
     client_static_public
 
-client_accept_mac := Poly1305(Blake2s_Keyed(key2, "tag"), client_transcript)
+handshake_keys := BLAKE3_Keyed(key2, "tag", 32)
+client_accept_mac := Poly1305(handshake_keys[0:32], client_transcript)
 ```
 
 **Client Accept Packet**
@@ -498,9 +500,9 @@ TODO
 **Server Accept MAC**
 
 ```go
-key1 := Blake2s_Keyed(X25519(server_static_private,    client_ephemeral_public), zero)
-key2 := Blake2s_Keyed(X25519(server_static_private,    client_static_public   ), key1)
-key3 := Blake2s_Keyed(X25519(server_ephemeral_private, client_ephemeral_public), key2)
+key1 := BLAKE3_Keyed(X25519(server_static_private,    client_ephemeral_public), zero, 32)
+key2 := BLAKE3_Keyed(X25519(server_static_private,    client_static_public   ), key1, 32)
+key3 := BLAKE3_Keyed(X25519(server_ephemeral_private, client_ephemeral_public), key2, 32)
 
 // TODO mix in additional metadata
 server_transcript := "STLv1.0\x00" ||
@@ -509,7 +511,10 @@ server_transcript := "STLv1.0\x00" ||
     client_accept.static ||
     server_ephemeral_public
 
-server_accept_mac := Poly1305(Blake2s_Keyed(key3, "tag"), server_transcript)
+master_keys := BLAKE3_Keyed(key3, "tag", 3 * 32)
+server_accept_mac := Poly1305(master_keys[0:32], server_transcript)
+server_recv_key := master_keys[32:64]
+server_send_key := master_keys[64:96]
 ```
 
 **Server Accept Packet**
@@ -526,11 +531,9 @@ server_accept.version_max  = 0x0001  // version 1
 server_accept.suite        = client_accept.suite
 ```
 
-**Server Keys**
-
-```go
 TODO
-```
+
+### 3.3.8. Client Finish
 
 TODO
 
