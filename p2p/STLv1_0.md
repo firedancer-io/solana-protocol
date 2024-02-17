@@ -47,11 +47,10 @@ STL aims to support the following technical capabilities:
 - IP datagram abstraction: To support high performance networking
   over the Internet, the transport layer assumes unicast UDP traffic.
 
-- Simple source IP authentication: Use plaintext ephemeral session
-  IDs to protect against IP spoofing attacks and some forms of
-  payload injection.  Negotiation of session IDs is provided by the
-  handshake protocol.  Protection against eavesdroppers is separately
-  provided in the encrypted mode.
+- Packet authentication: Every application packet is protected by a
+  cryptographically secure MAC.
+
+- Encryption (optional)
 
 - Uni/bidirectional mode: Support efficient multicast-over-unicast
   (e.g. Solana Turbine protocol) in unidirectional mode.
@@ -89,12 +88,7 @@ defense of the STL server side.  Requirements:
   subjected to packet flood.  (Elliptic curve cryptography at line
   rate might exhaust compute resources)
 
-### 1.3. Encrypted mode requirements
-
-The application layer optionally supports an encrypted mode.
-Encrypted application data is concealed from eavesdroppers.
-
-### 1.4. Non-requirements
+### 1.3. Non-requirements
 
 STL explicitly drops support for some features not required for use in
 the Solana validator network.
@@ -108,7 +102,7 @@ recover confidential information from public packet length information.
 It is the responsibility of the application to pad the plaintext before
 passing it to STL.
 
-**Client Anonymity**
+**Identity Hiding**
 
 The STL v1.0 handshake does not encrypt peer identities (public keys).
 
@@ -256,7 +250,7 @@ At offset `0x08` follows packet type-specific data.
 ## 3.3. Handshake Protocol
 
 The handshake cryptography in STLv1.0 is an instantation of Noise
-protocol `Noise_N_25519_ChaChaPoly_BLAKE2s` with handshake pattern IK.
+protocol `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
 
 To improve filtering performance, all handshake data (including the
 client identity) is sent unencrypted.  This gives up the identity
@@ -345,7 +339,9 @@ Functions:
 
 - `SipHash2-4(key [16]byte, msg []byte) -> (hash [8]byte)`:
   SipHash2-4 keyed hash function
-- `Blake2s(key [32]byte, msg []byte) -> (hash [32]byte)`:
+- `Blake2s(msg []byte) -> (hash [32]byte)`:
+  Blake2s hash function
+- `Blake2s_Keyed(key [32]byte, msg []byte) -> (hash [32]byte)`:
   Blake2s keyed hash function
 - `X25519_Keygen() -> (Curve25519_PrivateKey, X25519_PublicKey)`:
   Generate a new X25519 key pair from local cryptographically secure
@@ -360,7 +356,7 @@ Functions:
 - `Poly1305(key [32]byte, msg []byte) -> [16]byte`
   Generate a one-time message authentication code using Poly1305
   (Poly1305 tag)
-- `ChaCha20_Block(key [32]byte, message [64]byte, index [4]byte, nonce [12]byte) -> (encrypted_message [64]byte)`
+- `ChaCha20_Block(key [32]byte, index u32, nonce [12]byte) -> (block [64]byte)`
   The ChaCha20 block function
 - `ChaCha20_Poly1305_Encrypt(key [32]byte, nonce [12]byte, data []byte, aad []byte) -> (encrypted_data []byte)`:
   Encrypt a byte stream with ChaCha20 and generate a Poly1305 tag that
@@ -450,13 +446,91 @@ The _Server Cookie_ is a hash over the following message.  TODO
 
 **Server Continue Packet**
 
+```go
+var server_continue HandshakePacket
+server_continue.version_type = 0x1b    // version 1, server continue
+server_continue.session_id   = zero
+server_continue.cookie       = server_cookie
+server_continue.static       = server_static_public
+server_continue.ephemeral    = zero
+server_continue.mac          = zero
+server_continue.version_max  = 0x0001  // version 1
+server_continue.suite        = client_initial.suite
+```
+
 TODO
 
 ### 3.3.6. Client Accept
 
+**Client Accept MAC**
+
+```go
+key1 := Blake2s_Keyed(X25519(client_ephemeral_private, server_static_public), zero)
+key2 := Blake2s_Keyed(X25519(client_static_private,    server_static_public), key1)
+
+// TODO mix in additional metadata
+client_transcript := "STLv1.0\x00" ||
+    server_continue.static ||
+    client_ephemeral_public ||
+    client_static_public
+
+client_accept_mac := Poly1305(Blake2s_Keyed(key2, "tag"), client_transcript)
+```
+
+**Client Accept Packet**
+
+```go
+var client_accept HandshakePacket
+client_accept.version_type = 0x1c    // version 1, client accept
+client_accept.session_id   = zero
+client_accept.cookie       = server_continue.cookie
+client_accept.static       = client_static_public
+client_accept.ephemeral    = client_ephemeral_public
+client_accept.mac          = client_accept_mac
+client_accept.version_max  = 0x0001  // version 1
+client_accept.suite        = client_initial.suite
+```
+
 TODO
 
 ### 3.3.7. Server Accept
+
+**Server Accept MAC**
+
+```go
+key1 := Blake2s_Keyed(X25519(server_static_private,    client_ephemeral_public), zero)
+key2 := Blake2s_Keyed(X25519(server_static_private,    client_static_public   ), key1)
+key3 := Blake2s_Keyed(X25519(server_ephemeral_private, client_ephemeral_public), key2)
+
+// TODO mix in additional metadata
+server_transcript := "STLv1.0\x00" ||
+    server_static_public ||
+    client_accept.ephemeral ||
+    client_accept.static ||
+    server_ephemeral_public
+
+server_accept_mac := Poly1305(Blake2s_Keyed(key3, "tag"), server_transcript)
+```
+
+**Server Accept Packet**
+
+```go
+var server_accept HandshakePacket
+server_accept.version_type = 0x1d    // version 1, server accept
+server_accept.session_id   = TODO
+server_accept.cookie       = server_continue.cookie
+server_accept.static       = server_static_public
+server_accept.ephemeral    = server_ephemeral_public
+server_accept.mac          = server_accept_mac
+server_accept.version_max  = 0x0001  // version 1
+server_accept.suite        = client_accept.suite
+```
+
+**Server Keys**
+
+```go
+TODO
+```
 
 TODO
 
@@ -510,8 +584,8 @@ TODO
 
 ### 3.6.2. AEAD Cipher
 
-STL encrypts application packets using the AES-128-GCM AEAD cipher.
-(Authenticated encryption with associated data)
+STL encrypts application packets using the ChaCha20-Poly1305 AEAD
+cipher.  (Authenticated encryption with associated data)
 
 At a high-level, AEAD encryption produces a ciphertext and MAC tag
 given an encryption key, plaintext to be encrypted, associated data
