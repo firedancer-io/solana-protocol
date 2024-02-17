@@ -355,12 +355,14 @@ Functions:
 - `Poly1305(key [32]byte, msg []byte) -> [16]byte`
   Generate a one-time message authentication code using Poly1305
   (Poly1305 tag)
-- `ChaCha20_Block(key [32]byte, index u32, nonce [12]byte) -> (block [64]byte)`
+- `ChaCha20_Nonce(seq u32) -> [12]byte`
+  TODO
+- `ChaCha20_Block(key [32]byte, nonce [12]byte, index u32) -> (block [64]byte)`
   The ChaCha20 block function
-- `ChaCha20_Poly1305_Encrypt(key [32]byte, nonce [12]byte, data []byte, aad []byte) -> (encrypted_data []byte)`:
+- `ChaCha20_Poly1305_Encrypt(key [32]byte, nonce [12]byte, data []byte, aad []byte) -> (encrypted_data []byte, tag [16]byte)`:
   Encrypt a byte stream with ChaCha20 and generate a Poly1305 tag that
   authenticates the encrypted data and unencrypted associated data
-- `ChaCha20_Poly1305_Decrypt(key [32]byte, nonce [12]byte, encrypted_data []byte, aad []byte) -> (data []byte, is_valid bool)`:
+- `ChaCha20_Poly1305_Decrypt(key [32]byte, nonce [12]byte, encrypted_data []byte, aad []byte, tag [16]byte) -> (data []byte, is_valid bool)`:
   Decrypt a ChaCha20-encrypted byte stream and verify that the Poly1305
   tag is valid for the decrypted data and unencrypted associated data
 
@@ -509,8 +511,8 @@ server_transcript := "STLv1.0\x00" ||
     server_ephemeral_public
 
 server_accept_mac := Poly1305(master_keys[0:32], server_transcript)
-server_recv_key := master_keys[32:64]
-server_send_key := master_keys[64:96]
+client_key := master_keys[32:64]
+server_key := master_keys[64:96]
 ```
 
 **Server Accept Packet**
@@ -564,24 +566,16 @@ Each peer MUST reject sequence numbers greater than `0x7fff_ffff`.
 The authentication application protocol in STLv1.0 is identified by
 feature string `STL-1.0-A`.
 
-### 3.5.1. MAC Key Expansion
+**MAC computation**
 
-TODO
-
-### 3.5.2. Payload
-
-TODO
+```go
+mac_tag := Poly1305(ChaCha20_Block(key, ChaCha20_Nonce(seq), 0)[:32], TODO)
+```
 
 ## 3.6. Encrypted Application Protocol
 
 The encrypted application protocol in STLv1.0 is identified by feature
 string `STL-1.0-AE`.
-
-### 3.6.1. AEAD Key Expansion
-
-TODO
-
-### 3.6.2. AEAD Cipher
 
 STL encrypts application packets using the ChaCha20-Poly1305 AEAD
 cipher.  (Authenticated encryption with associated data)
@@ -589,6 +583,18 @@ cipher.  (Authenticated encryption with associated data)
 At a high-level, AEAD encryption produces a ciphertext and MAC tag
 given an encryption key, plaintext to be encrypted, associated data
 that is not encrypted, and an initialization vector.
+
+**Encryption**
+
+```go
+payload, mac_tag := ChaCha20_Poly1305_Encrypt(key, ChaCha20_Nonce(seq), plaintext, TODO)
+```
+
+**Decryption**
+
+```go
+plaintext, is_valid := ChaCha20_Poly1305_Decrypt(key, ChaCha20_Nonce(seq), payload, TODO, mac_tag)
+```
 
 ### 3.4.3. Initialization Vector
 
