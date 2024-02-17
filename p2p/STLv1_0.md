@@ -340,10 +340,8 @@ Functions:
 
 - `SipHash2-4(key [16]byte, msg []byte) -> (hash [8]byte)`:
   SipHash2-4 keyed hash function
-- `BLAKE3(msg []byte, sz int) -> (hash [sz]byte)`:
-  BLAKE3 hash function
-- `BLAKE3_Keyed(key [32]byte, msg []byte, sz int) -> (hash [sz]byte)`:
-  BLAKE3 keyed hash function
+- `BLAKE3(key [32]byte, msg []byte, sz int) -> (hash [sz]byte)`:
+  BLAKE3 keyed XOF hash function
 - `X25519_Keygen() -> (Curve25519_PrivateKey, X25519_PublicKey)`:
   Generate a new X25519 key pair from local cryptographically secure
   randomness
@@ -466,8 +464,8 @@ TODO
 **Client Accept MAC**
 
 ```go
-key1 := BLAKE3_Keyed(X25519(client_ephemeral_private, server_static_public), zero, 32)
-key2 := BLAKE3_Keyed(X25519(client_static_private,    server_static_public), key1, 32)
+key1 := BLAKE3(X25519(client_ephemeral_private, server_static_public), zero, 32)
+key2 := BLAKE3(X25519(client_static_private,    server_static_public), key1, 32)
 
 // TODO mix in additional metadata
 client_transcript := "STLv1.0\x00" ||
@@ -475,7 +473,7 @@ client_transcript := "STLv1.0\x00" ||
     client_ephemeral_public ||
     client_static_public
 
-handshake_keys := BLAKE3_Keyed(key2, "tag", 32)
+handshake_keys := BLAKE3(key2, "tag", 32)
 client_accept_mac := Poly1305(handshake_keys[0:32], client_transcript)
 ```
 
@@ -500,9 +498,9 @@ TODO
 **Server Accept MAC**
 
 ```go
-key1 := BLAKE3_Keyed(X25519(server_static_private,    client_ephemeral_public), zero, 32)
-key2 := BLAKE3_Keyed(X25519(server_static_private,    client_static_public   ), key1, 32)
-key3 := BLAKE3_Keyed(X25519(server_ephemeral_private, client_ephemeral_public), key2, 32)
+key1 := BLAKE3(X25519(server_static_private,    client_ephemeral_public), zero, 32)
+key2 := BLAKE3(X25519(server_static_private,    client_static_public   ), key1, 32)
+key3 := BLAKE3(X25519(server_ephemeral_private, client_ephemeral_public), key2, 32)
 
 // TODO mix in additional metadata
 server_transcript := "STLv1.0\x00" ||
@@ -511,7 +509,7 @@ server_transcript := "STLv1.0\x00" ||
     client_accept.static ||
     server_ephemeral_public
 
-master_keys := BLAKE3_Keyed(key3, "tag", 3 * 32)
+master_keys := BLAKE3(key3, "tag", 3 * 32)
 server_accept_mac := Poly1305(master_keys[0:32], server_transcript)
 server_recv_key := master_keys[32:64]
 server_send_key := master_keys[64:96]
