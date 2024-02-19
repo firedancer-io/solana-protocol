@@ -244,6 +244,7 @@ Incoming packets with an unsupported `type` MUST be dropped.
 | `0xb` | Handshake   | Server Continue      |
 | `0xc` | Handshake   | Client Accept        |
 | `0xd` | Handshake   | Server Accept        |
+| `0xe` | Handshake   | Server Retry         |
 
 At offset `0x08` follows packet type-specific data.
 
@@ -257,8 +258,8 @@ To improve filtering performance, all handshake data (including the
 client identity) is sent unencrypted.  This gives up the identity
 hiding property of STL but preserves all other security properties.
 
-The following figure shows the four-way sequence of handshake packets
-in STL v1.0.
+The following figure shows the basic four-way sequence of handshake
+packets in STL v1.0.
 
 ```
 +---------+            +---------+
@@ -414,7 +415,50 @@ client_initial.version_max  = 0x0001  // version 1
 client_initial.suite        = ?       // any supported version 1 suite
 ```
 
-### 3.3.5. Server Continue
+### 3.3.5. Server Retry
+
+**Server Retry Packet**
+
+```go
+var server_retry HandshakePacket
+server_retry.version_type = 0x1e    // version 1, server retry
+server_retry.session_id   = zero
+server_retry.cookie       = retry_cookie
+server_retry.static       = zero
+server_retry.ephemeral    = client_initial.ephemeral
+server_retry.mac          = zero
+server_retry.version_max  = 0x0001  // version 1
+server_retry.suite        = 0x0000
+```
+
+TODO
+
+```
++---------+            +----------+           +---------+
+| Client  |            | Firewall |           | Server  |
++---------+            +----------+           +---------+
+     |                      |                      |
+     | Client Initial       |                      |
+     |--------------------->|                      |
+     |                      |                      |
+     |         Server Retry |                      |
+     |<---------------------|                      |
+     |                                             |
+     | Client Initial                              |
+     |-------------------------------------------->|
+     |                                             |
+     |                             Server Continue |
+     |<--------------------------------------------|
+     |                                             |
+     | Client Accept                               |
+     |-------------------------------------------->|
+     |                                             |
+     |                               Server Accept |
+     |<--------------------------------------------|
+```
+
+
+### 3.3.6. Server Continue
 
 The server MAY ignore any received _Client Initial_.
 
@@ -461,7 +505,7 @@ server_continue.suite        = client_initial.suite
 
 TODO
 
-### 3.3.6. Client Accept
+### 3.3.7. Client Accept
 
 **Client Accept MAC**
 
@@ -494,7 +538,7 @@ client_accept.suite        = client_initial.suite
 
 TODO
 
-### 3.3.7. Server Accept
+### 3.3.8. Server Accept
 
 **Server Accept MAC**
 
@@ -531,7 +575,7 @@ server_accept.suite        = client_accept.suite
 
 TODO
 
-### 3.3.8. Client Finish
+### 3.3.9. Client Finish
 
 TODO
 
