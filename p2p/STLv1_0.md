@@ -213,7 +213,7 @@ configuration.  This specification covers the following suites.
 | `0x0001` | `STL-1.0-A`  | STL v1.0, authenticated, unencrypted |
 | `0x0002` | `STL-1.0-AE` | STL v1.0, authenticated, encrypted   |
 
-### 3.2. Common Header
+### 3.3. Common Header
 
 All UDP payloads in STL start with the common packet header.
 The common packet header is defined as follows.
@@ -239,16 +239,15 @@ Incoming packets with an unsupported `type` MUST be dropped.
 | Value | Protocol    | Meaning              |
 |-------|-------------|----------------------|
 | `0x1` | Application | Data                 |
-| `0x9` | Handshake   | Reserved             |
+| `0x9` | Handshake   | Server Retry         |
 | `0xa` | Handshake   | Client Initial       |
 | `0xb` | Handshake   | Server Continue      |
 | `0xc` | Handshake   | Client Accept        |
 | `0xd` | Handshake   | Server Accept        |
-| `0xe` | Handshake   | Server Retry         |
 
 At offset `0x08` follows packet type-specific data.
 
-## 3.3. Handshake Protocol
+## 3.4. Handshake Protocol
 
 The handshake cryptography in STLv1.0 follows the Noise handshake
 pattern IK.  The ECDH function is X25519.  The MAC function is Poly1305.
@@ -305,22 +304,24 @@ IK:
   # key, client ephemeral public key).
 ```
 
-### 3.3.1. Handshake Packet
+### 3.4.1. Handshake Packet
 
 All `STL-1.0-A` and `STL-1.0-AE` packets in the handshake protocol use
 the following layout.
 
-| Offset | Field         | Type       | Description               |
-|--------|---------------|------------|---------------------------|
-| `0x00` | Common Header |            |                           |
-| `0x08` | `cookie`      | `[32]byte` | Server cookie             |
-| `0x28` | `static`      | `[32]byte` | Identity key              |
-| `0x48` | `ephemeral`   | `[32]byte` | Ephemeral key             |
-| `0x68` | `mac`         | `[32]byte` | Message auth tag          |
-| `0x88` | `version_max` | `u16`      | Max supported STL version |
-| `0x8a` | `suite`       | `u16`      | Cryptographic suite       |
+| Offset | Field            | Type       | Description               |
+|--------|------------------|------------|---------------------------|
+| `0x00` | Common Header    |            |                           |
+| `0x08` | `cookie_client`  | `[8]byte`  | Client cookie             |
+| `0x10` | `cookie_server`  | `[8]byte`  | Server cookie             |
+| `0x18` | `cookie_gateway` | `[8]byte`  | Server gateway cookie     |
+| `0x20` | `static`         | `[32]byte` | Identity key              |
+| `0x40` | `ephemeral`      | `[32]byte` | Ephemeral key             |
+| `0x60` | `mac`            | `[16]byte` | Message auth tag          |
+| `0x70` | `version_max`    | `u16`      | Max supported STL version |
+| `0x72` | `suite`          | `u16`      | Cryptographic suite       |
 
-### 3.3.2. Cryptographic Operations
+### 3.4.2. Cryptographic Operations
 
 STLv1.0 uses the following externally defined routines.
 
@@ -367,7 +368,7 @@ Functions:
   Decrypt a ChaCha20-encrypted byte stream and verify that the Poly1305
   tag is valid for the decrypted data and unencrypted associated data
 
-### 3.3.3. Static Keys
+### 3.4.3. Static Keys
 
 Both peers compute an X25519 key pair ahead of time.
 
@@ -390,12 +391,15 @@ server_static_private := external_ed25519_server_private
 server_static_public  := EdToX25519(external_ed25519_server_public)
 ```
 
-### 3.3.4. Client Initial
+### 3.4.4. Client Initial
 
-Before connecting, the client generates a new ephemeral X25519 key pair:
+Before connecting, the client generates a new ephemeral X25519 key pair
+and a random "client cookie":
 
 ```go
 client_ephemeral_private, client_ephemeral_public := X25519_Keygen()
+
+client_cookie := getrandom(8)
 ```
 
 The client initial is the first handshake message.  It includes the
@@ -405,30 +409,34 @@ client's connection request parameters.
 
 ```go
 var client_initial HandshakePacket
-client_initial.version_type = 0x1a    // version 1, client initial
-client_initial.session_id   = zero
-client_initial.cookie       = zero
-client_initial.static       = client_static_public
-client_initial.ephemeral    = client_ephemeral_public
-client_initial.mac          = zero
-client_initial.version_max  = 0x0001  // version 1
-client_initial.suite        = ?       // any supported version 1 suite
+client_initial.version_type   = 0x1a    // version 1, client initial
+client_initial.session_id     = zero
+client_initial.cookie_client  = cookie_client
+client_initial.cookie_server  = zero
+client_initial.cookie_gateway = zero
+client_initial.static         = client_static_public
+client_initial.ephemeral      = client_ephemeral_public
+client_initial.mac            = zero
+client_initial.version_max    = 0x0001  // version 1
+client_initial.suite          = ?       // any supported version 1 suite
 ```
 
-### 3.3.5. Server Retry
+### 3.4.5. Server Retry
 
 **Server Retry Packet**
 
 ```go
 var server_retry HandshakePacket
-server_retry.version_type = 0x1e    // version 1, server retry
-server_retry.session_id   = zero
-server_retry.cookie       = retry_cookie
-server_retry.static       = zero
-server_retry.ephemeral    = client_initial.ephemeral
-server_retry.mac          = zero
-server_retry.version_max  = 0x0001  // version 1
-server_retry.suite        = 0x0000
+server_retry.version_type   = 0x1e    // version 1, server retry
+server_retry.session_id     = zero
+server_retry.cookie_client  = client_initial.cookie_client
+server_retry.cookie_server  = retry_cookie
+server_retry.cookie_gateway = zero
+server_retry.static         = zero
+server_retry.ephemeral      = zero
+server_retry.mac            = zero
+server_retry.version_max    = 0x0001  // version 1
+server_retry.suite          = 0x0000
 ```
 
 TODO
@@ -458,7 +466,7 @@ TODO
 ```
 
 
-### 3.3.6. Server Continue
+### 3.4.6. Server Continue
 
 The server MAY ignore any received _Client Initial_.
 
@@ -493,19 +501,21 @@ The _Server Cookie_ is a hash over the following message.  TODO
 
 ```go
 var server_continue HandshakePacket
-server_continue.version_type = 0x1b    // version 1, server continue
-server_continue.session_id   = zero
-server_continue.cookie       = server_cookie
-server_continue.static       = server_static_public
-server_continue.ephemeral    = zero
-server_continue.mac          = zero
-server_continue.version_max  = 0x0001  // version 1
-server_continue.suite        = client_initial.suite
+server_continue.version_type   = 0x1b    // version 1, server continue
+server_continue.session_id     = zero
+server_continue.cookie_client  = client_initial.cookie_client
+server_continue.cookie_server  = zero
+server_continue.cookie_gateway = zero
+server_continue.static         = server_static_public
+server_continue.ephemeral      = zero
+server_continue.mac            = zero
+server_continue.version_max    = 0x0001  // version 1
+server_continue.suite          = client_initial.suite
 ```
 
 TODO
 
-### 3.3.7. Client Accept
+### 3.4.7. Client Accept
 
 **Client Accept MAC**
 
@@ -526,19 +536,22 @@ client_accept_mac := Poly1305(hs_key, client_transcript)
 
 ```go
 var client_accept HandshakePacket
-client_accept.version_type = 0x1c    // version 1, client accept
-client_accept.session_id   = zero
-client_accept.cookie       = server_continue.cookie
-client_accept.static       = client_static_public
-client_accept.ephemeral    = client_ephemeral_public
-client_accept.mac          = client_accept_mac
-client_accept.version_max  = 0x0001  // version 1
-client_accept.suite        = client_initial.suite
+client_accept.version_type   = 0x1c    // version 1, client accept
+client_accept.session_id     = zero
+client_accept.cookie         = server_continue.cookie
+client_accept.cookie_client  = client_initial.cookie_client
+client_accept.cookie_server  = server_continue.cookie_server
+client_accept.cookie_gateway = server_continue.cookie_gateway
+client_accept.static         = client_static_public
+client_accept.ephemeral      = client_ephemeral_public
+client_accept.mac            = client_accept_mac
+client_accept.version_max    = 0x0001  // version 1
+client_accept.suite          = client_initial.suite
 ```
 
 TODO
 
-### 3.3.8. Server Accept
+### 3.4.8. Server Accept
 
 **Server Accept MAC**
 
@@ -575,13 +588,9 @@ server_accept.suite        = client_accept.suite
 
 TODO
 
-### 3.3.9. Client Finish
+## 3.5. Base Application Protocol
 
-TODO
-
-## 3.4. Base Application Protocol
-
-### 3.4.1. Application Packet
+### 3.5.1. Application Packet
 
 Encrypted application packets use the following layout.
 
@@ -596,7 +605,7 @@ The `mac_tag` the authentication tag.  `payload` contains application
 data (raw or encrypted depending on features string).  `seq` is the
 sequence number described in Section 3.4.2.
 
-### 3.4.2. Sequence Number
+### 3.5.2. Sequence Number
 
 Each encrypted application packet is tagged with a sequence number by
 the client.  The sequence number is a 32-bit little endian integer.
@@ -605,7 +614,7 @@ sequence number is incremented by one for every subsequent packet.
 
 Each peer MUST reject sequence numbers greater than `0x7fff_ffff`.
 
-## 3.5. Authenticated Application Protocol
+## 3.6. Authenticated Application Protocol
 
 The authentication application protocol in STLv1.0 is identified by
 feature string `STL-1.0-A`.
@@ -616,7 +625,7 @@ feature string `STL-1.0-A`.
 mac_tag := Poly1305(ChaCha20_Block(key, ChaCha20_Nonce(seq), 0)[:32], TODO)
 ```
 
-## 3.6. Encrypted Application Protocol
+## 3.7. Encrypted Application Protocol
 
 The encrypted application protocol in STLv1.0 is identified by feature
 string `STL-1.0-AE`.
@@ -640,7 +649,7 @@ payload, mac_tag := ChaCha20_Poly1305_Encrypt(key, ChaCha20_Nonce(seq), plaintex
 plaintext, is_valid := ChaCha20_Poly1305_Decrypt(key, ChaCha20_Nonce(seq), payload, TODO, mac_tag)
 ```
 
-### 3.4.3. Initialization Vector
+### 3.7.1. Initialization Vector
 
 It is assumed that the AEAD function is based on a stream cipher
 construction.  In STL, a separate AEAD stream is created for every
@@ -661,19 +670,21 @@ It is laid out as follows.
 | `0x02` | `_pad_02`      | `u16` |
 | `0x04` | `seq`          | `u64` |
 
-## 5. Design Considerations
+## 4. Design Considerations
 
-### 5.1. Static Layout
-
-TODO
-
-### 5.2. Session ID size
+### 4.1. Static Layout
 
 TODO
 
-### 5.3. Unidirectional Mode
+### 4.2. Session ID size
 
-### 5.4. Cryptography
+TODO
+
+### 4.3. Unidirectional Mode
+
+TODO
+
+### 4.4. Cryptography
 
 This draft of STL uses the cryptographic algorithms of Noise Protocol.
 The ChaCha20-based suite is chosen over AES because ChaCha-like core
@@ -682,7 +693,7 @@ algorithms in the Noise protocol framework are thought to have been
 subjected to sufficient security research.  High quality open source
 implementations are also available.
 
-#### 5.5. Server Cookie
+#### 4.5. Server Cookie
 
 The server cookie has particularly weak security requirements. If
 SipHash2-4 is broken, only server-side DDoS mitigation is temporarily
@@ -691,8 +702,12 @@ hash function is also in the "hot path" of a flood attack involving
 repeated client initial packets.  The cookie hash function should thus
 be chosen for maximum performance.
 
-## 6. Implementation Guidance
+## 5. Implementation Guidance
 
-### 6.1. Load Shedding
+### 5.1. Load Shedding
+
+TODO
+
+### 5.2. External Firewall
 
 TODO
